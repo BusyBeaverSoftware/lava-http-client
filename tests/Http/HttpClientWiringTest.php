@@ -179,6 +179,44 @@ final class HttpClientWiringTest extends TestCase
         }
     }
 
+    public function testARetryThatSucceedsReturnsTheGoodResponse(): void
+    {
+        // The two tests above prove the retry COUNT when every attempt fails.
+        // This is the other half: the first attempt produces no response and the
+        // second does, so the caller gets the good one — and the counter, which
+        // lives in the server's process, is what says the second attempt
+        // happened rather than the client believing it did.
+        //
+        // The fixture truncates rather than sending a 500, and that is the rule
+        // under test: the pack's retry boundary is "no response arrived". A
+        // route that recovered after a 500 would pass here while proving the
+        // opposite — see the fixture router's `/flaky`.
+        $id = LocalServer::flakyId();
+        $client = self::app()->container->get(HttpClient::class);
+        self::assertInstanceOf(HttpClient::class, $client);
+
+        $response = $client->get(self::$server->url("/flaky?id={$id}"));
+
+        self::assertSame(200, $response->getStatusCode());
+        self::assertSame('ok after 2 attempts', (string) $response->getBody());
+        self::assertSame(2, LocalServer::counter('flaky', $id), 'the second attempt is the one that answered');
+    }
+
+    /**
+     * The counter-file prefix is written twice — here and in the fixture router
+     * — because the server is a separate process with no autoloader and cannot
+     * be asked for it. This is what keeps the two copies from drifting: a rename
+     * in one place and not the other would leave the counters unreadable, and
+     * every `assertSame(2, LocalServer::counter(…))` would silently compare
+     * against zero.
+     */
+    public function testTheFixtureRouterKeepsCountersWhereTheHarnessLooksForThem(): void
+    {
+        $router = (string) file_get_contents(dirname(__DIR__) . '/fixtures/server/router.php');
+
+        self::assertStringContainsString(LocalServer::COUNTER_PREFIX, $router);
+    }
+
     public function testTheTransportIsInjectableOnItsOwn(): void
     {
         // `CurlTransport` is registered separately from `HttpClient` so a

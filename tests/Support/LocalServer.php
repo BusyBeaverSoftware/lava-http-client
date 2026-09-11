@@ -23,10 +23,27 @@ namespace Lava\HttpClient\Tests\Support;
  */
 final class LocalServer
 {
+    /**
+     * The counter-file prefix, duplicated from `tests/fixtures/server/router.php`
+     * on purpose: the server is a separate process with no autoloader, so it
+     * cannot be asked. A test asserts the two copies agree.
+     */
+    public const COUNTER_PREFIX = 'lava-http-fixture-';
+
     /** @var resource|null */
     private $process;
 
     private static ?self $shared = null;
+
+    /**
+     * The ids `flakyId()` has handed out, so `stop()` can remove the counter
+     * files the router wrote for them. They are keyed by a random id, so nothing
+     * will ever reuse one — without this they are litter that accumulates in
+     * `/tmp` for the life of the machine.
+     *
+     * @var list<string>
+     */
+    private static array $counters = [];
 
     /**
      * @param resource $handle
@@ -81,11 +98,14 @@ final class LocalServer
             usleep(50_000);
         }
 
+        // Read the log BEFORE stopping: `stop()` deletes it, and the log is the
+        // only thing that explains why the server never came up.
+        $why = is_file($log) ? (string) file_get_contents($log) : '(no log)';
+
         $server->stop();
 
         throw new \RuntimeException(
-            "the fixture HTTP server did not come up on port {$port}.\n"
-            . (string) file_get_contents($log),
+            "the fixture HTTP server did not come up on port {$port}.\n" . $why,
         );
     }
 
@@ -100,23 +120,30 @@ final class LocalServer
         return $this->base;
     }
 
-    /** A unique id for `/flaky`, so tests never share a counter. */
+    /**
+     * A unique id for a counter the fixture server keeps, so tests never share
+     * one. The id is recorded here because it is the only thing that ties a
+     * counter file back to this process — see {@see self::stop()}.
+     */
     public static function flakyId(): string
     {
-        return bin2hex(random_bytes(8));
+        $id = bin2hex(random_bytes(8));
+        self::$counters[] = $id;
+
+        return $id;
     }
 
     /**
      * Where the fixture server keeps a counter, so a test can read one.
      *
-     * The prefix is duplicated from `tests/fixtures/server/router.php` on
-     * purpose: the server is a separate process with no autoloader, so it
-     * cannot be asked. The name is asserted by a test, which is what keeps the
-     * two copies honest.
+     * The prefix is a constant shared with `tests/fixtures/server/router.php`
+     * by duplication — the server is a separate process with no autoloader, so
+     * it cannot be asked — and a test asserts the router file contains it,
+     * which is what keeps the two copies honest.
      */
     public static function counterFile(string $name, string $id): string
     {
-        return sys_get_temp_dir() . "/lava-http-fixture-{$name}-{$id}";
+        return sys_get_temp_dir() . '/' . self::COUNTER_PREFIX . $name . '-' . $id;
     }
 
     public static function counter(string $name, string $id): int
@@ -160,6 +187,21 @@ final class LocalServer
 
         proc_close($this->process);
         $this->process = null;
+
+        // Both of these are files this harness caused to exist, so both go away
+        // with it. A run that leaves them behind leaves them behind for good:
+        // the log is a tempnam and the counters are keyed by a random id, so
+        // nothing ever reuses either. The counter name is not known here — an
+        // id is handed out before a test decides which counter it wants — so
+        // every counter file carrying this id goes, by glob. The id is hex, so
+        // it cannot introduce a wildcard of its own.
+        @unlink($this->log);
+        foreach (self::$counters as $id) {
+            foreach (glob(sys_get_temp_dir() . '/' . self::COUNTER_PREFIX . '*-' . $id) ?: [] as $counter) {
+                @unlink($counter);
+            }
+        }
+        self::$counters = [];
 
         return true;
     }

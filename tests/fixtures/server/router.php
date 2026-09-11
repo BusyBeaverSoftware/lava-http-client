@@ -91,22 +91,32 @@ switch (true) {
         $send((int) $matched[1], 'status ' . $matched[1]);
         return;
 
-    // Fails `fail` times, then succeeds — and the counter is per `id`, so two
-    // tests never share one. A counter file rather than memory because the
-    // server is a separate process from the test.
+    // No response on the FIRST attempt and a complete one on the second — which
+    // is exactly the boundary the pack retries on, and the counter is per `id`
+    // so two tests never share one. A counter file rather than memory because
+    // the server is a separate process from the test.
+    //
+    // It truncates rather than erroring, and that is the fixture's whole point.
+    // A route that recovered after a 500 would model a rule the pack
+    // deliberately does not have: a status is a RESULT that comes back to the
+    // caller, and the retry boundary is "no response arrived" — retrying a 5xx
+    // without honouring `Retry-After` and without jitter is a request the
+    // caller's rate limiter pays for twice. See HttpClient's docblock.
     case $path === '/flaky':
-        $fail = (int) ($_GET['fail'] ?? 2);
         $id = (string) preg_replace('/[^A-Za-z0-9-]/', '', (string) ($_GET['id'] ?? 'default'));
         $file = sys_get_temp_dir() . '/lava-http-fixture-flaky-' . $id;
-        $count = is_file($file) ? (int) file_get_contents($file) : 0;
-        $count++;
-        file_put_contents($file, (string) $count);
+        $seen = is_file($file) ? (int) file_get_contents($file) : 0;
+        file_put_contents($file, (string) ($seen + 1));
 
-        if ($count <= $fail) {
-            $send(500, 'flaky attempt ' . $count);
+        if ($seen === 0) {
+            // Promises 100 bytes and sends 5: curl sees the connection close
+            // before the body is complete and reports errno 18.
+            header('Content-Length: 100');
+            echo 'short';
             return;
         }
-        $send(200, 'ok after ' . $count . ' attempts');
+
+        $send(200, 'ok after ' . ($seen + 1) . ' attempts');
         return;
 }
 
