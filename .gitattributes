@@ -1,0 +1,5 @@
+# Read by `git archive`, which is what GitHub serves when Packagist hands a
+# consumer this package: these stay in the repository and out of their vendor/.
+/tests              export-ignore
+/phpunit.xml.dist   export-ignore
+/.gitattributes     export-ignore
