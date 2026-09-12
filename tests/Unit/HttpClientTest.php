@@ -140,7 +140,7 @@ final class HttpClientTest extends TestCase
     public function testThePacksOwnFailureIsRethrownUntouched(): void
     {
         // Re-wrapping would lose the redacted context and the `getRequest()`
-        // the PSR-18 interface promises. Same rule lava/db and lava/view
+        // the PSR-18 interface promises. Same rule lavaphp/db and lavaphp/view
         // follow: a wrapper wraps only what is not already a LavaProblem.
         $transport = new FakeTransport();
         $original = null;

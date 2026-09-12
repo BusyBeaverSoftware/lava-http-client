@@ -77,7 +77,7 @@ final class Url
      *    someone pasted `--json` output into. The two mistakes are not
      *    symmetric, so the rule leans.
      *
-     * This is the same rule `lava/db` applies to DSNs, applied to the other
+     * This is the same rule `lavaphp/db` applies to DSNs, applied to the other
      * kind of string that carries credentials.
      */
     public static function redact(string $url): string

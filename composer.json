@@ -1,5 +1,5 @@
 {
-    "name": "lava/http-client",
+    "name": "lavaphp/http-client",
     "description": "LavaPHP http-client pack — small PSR-18 client on ext-curl with timeouts, bounded retries, and non-2xx as LavaProblems.",
     "type": "library",
     "license": "MIT",
@@ -10,7 +10,7 @@
         "psr/http-factory": "^1.1",
         "psr/http-message": "^2.0",
         "nyholm/psr7": "^1.8",
-        "lava/core": "^0.1.0"
+        "lavaphp/core": "^0.1.0"
     },
     "require-dev": {
         "phpunit/phpunit": "^12.5"

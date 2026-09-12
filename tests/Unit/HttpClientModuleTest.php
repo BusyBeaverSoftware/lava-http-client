@@ -47,7 +47,7 @@ final class HttpClientModuleTest extends TestCase
     {
         $pack = (new HttpClientModule())->pack();
 
-        self::assertSame('lava/http-client', $pack->package);
+        self::assertSame('lavaphp/http-client', $pack->package);
         self::assertSame('http_client', $pack->feature);
         self::assertSame(['http_client'], $pack->configFiles, 'the stem LoadPackConfig looks for');
         self::assertSame([], $pack->envVars, 'config is the only source of settings');

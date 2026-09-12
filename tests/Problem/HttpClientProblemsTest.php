@@ -117,7 +117,7 @@ final class HttpClientProblemsTest extends TestCase
     public function testTheTransportFailureRedactsTheUrlAndTheReason(): void
     {
         // curl echoes the URL back in several of its errors, so the driver's
-        // text is not ours to trust — the same rule lava/db applies to a DSN
+        // text is not ours to trust — the same rule lavaphp/db applies to a DSN
         // and to PDO's message.
         $request = (new Psr17Factory())->createRequest(
             'GET',

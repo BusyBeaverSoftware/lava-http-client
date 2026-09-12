@@ -107,7 +107,7 @@ final class CurlTransportTest extends TestCase
         $seen = $this->echo($this->transport());
 
         self::assertSame('GET', $seen['method']);
-        self::assertSame('lava/http-client', $seen['user_agent']);
+        self::assertSame('lavaphp/http-client', $seen['user_agent']);
     }
 
     public function testItSendsAnAuthorizationHeader(): void

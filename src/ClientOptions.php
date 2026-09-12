@@ -41,7 +41,7 @@ final readonly class ClientOptions
         public int $retries = 2,
         /** Milliseconds between attempts. Fixed, not exponential: a deterministic delay is a testable one. */
         public int $backoffMs = 100,
-        public string $userAgent = 'lava/http-client',
+        public string $userAgent = 'lavaphp/http-client',
     ) {
     }
 
@@ -88,7 +88,7 @@ final readonly class ClientOptions
             connectTimeout: (float) $connectTimeout,
             retries: $retries,
             backoffMs: $backoff,
-            userAgent: $config->string('http_client.user_agent', 'lava/http-client'),
+            userAgent: $config->string('http_client.user_agent', 'lavaphp/http-client'),
         );
     }
 

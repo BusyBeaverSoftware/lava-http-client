@@ -3,7 +3,7 @@
 declare(strict_types=1);
 
 /*
- * The fixture server behind lava/http-client's live tests.
+ * The fixture server behind lavaphp/http-client's live tests.
  *
  * One route per thing the client has to get right, so each behaviour is a
  * plain GET or POST against a real socket rather than a mock agreeing with the

@@ -19,7 +19,7 @@ final class ClientOptionsTest extends TestCase
         self::assertSame(5.0, $options->connectTimeout);
         self::assertSame(2, $options->retries);
         self::assertSame(100, $options->backoffMs);
-        self::assertSame('lava/http-client', $options->userAgent);
+        self::assertSame('lavaphp/http-client', $options->userAgent);
     }
 
     public function testItReadsEveryKeyFromThePacksConfigFile(): void

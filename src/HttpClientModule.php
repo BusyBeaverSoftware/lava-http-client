@@ -13,7 +13,7 @@ use Nyholm\Psr7\Factory\Psr17Factory;
 use Psr\Http\Client\ClientInterface;
 
 /**
- * lava/http-client's entry point.
+ * lavaphp/http-client's entry point.
  *
  * Three ids, all singletons, and the order between them is the whole design:
  * `ClientOptions` is read from config **at register time** and the value is
@@ -29,7 +29,7 @@ use Psr\Http\Client\ClientInterface;
  * `duplicate_service` at boot and no way around it. An app that wants different
  * behaviour constructs its own: `new HttpClient($myTransport, $factory, $options)`,
  * or its own class entirely. The pack registers its own two ids and nothing
- * else, which is the same surface `lava/view` has.
+ * else, which is the same surface `lavaphp/view` has.
  *
  * `CurlTransport` is registered separately from `HttpClient` so that both are
  * reachable: `HttpClient` for the retries and the problems, `CurlTransport` for
@@ -51,7 +51,7 @@ final class HttpClientModule implements Module
         // entry for it in config/features.php is a boot problem, not a harmless
         // duplicate — and it can be turned off from `set` or from
         // LAVA_FEATURE_HTTP_CLIENT.
-        return PackInfo::of('lava/http-client', 'http_client', configFiles: ['http_client']);
+        return PackInfo::of('lavaphp/http-client', 'http_client', configFiles: ['http_client']);
     }
 
     public function register(Container $container, AppContext $ctx): void

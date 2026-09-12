@@ -94,7 +94,7 @@ final class HttpClient implements ClientInterface
         // A transport that already reports in this pack's own vocabulary is
         // rethrown untouched, so its redacted context and its `getRequest()`
         // survive. Only a foreign PSR-18 exception needs wrapping — the same
-        // rule lava/db and lava/view follow: a wrapper wraps what is not
+        // rule lavaphp/db and lavaphp/view follow: a wrapper wraps what is not
         // already a LavaProblem.
         if ($failure instanceof LavaProblem) {
             throw $failure;

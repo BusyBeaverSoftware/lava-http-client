@@ -9,5 +9,5 @@ return [
     // fixture exercises both halves of the manifest: `config/http_client.php`
     // is read by LoadPackConfig at boot, and the gate flag `http_client` is
     // defined by the pack from this very line.
-    ModuleRef::of(\Lava\HttpClient\HttpClientModule::class, package: 'lava/http-client', feature: 'http_client'),
+    ModuleRef::of(\Lava\HttpClient\HttpClientModule::class, package: 'lavaphp/http-client', feature: 'http_client'),
 ];
