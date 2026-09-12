@@ -10,15 +10,18 @@
         "psr/http-factory": "^1.1",
         "psr/http-message": "^2.0",
         "nyholm/psr7": "^1.8",
-        "lava/core": "@dev"
+        "lava/core": "^0.1.0"
     },
     "require-dev": {
         "phpunit/phpunit": "^12.5"
     },
     "repositories": {
-        "lava/core": { "type": "path", "url": "../core" }
+        "lava/core": {
+            "type": "path",
+            "url": "../core",
+            "options": { "versions": { "lava/core": "0.1.0" } }
+        }
     },
-    "minimum-stability": "dev",
     "prefer-stable": true,
     "autoload": {
         "psr-4": { "Lava\\HttpClient\\": "src/" }
