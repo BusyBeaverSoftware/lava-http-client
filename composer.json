@@ -10,7 +10,7 @@
         "psr/http-factory": "^1.1",
         "psr/http-message": "^2.0",
         "nyholm/psr7": "^1.8",
-        "lavaphp/core": "^0.2.0"
+        "lavaphp/core": "^0.3.0"
     },
     "require-dev": {
         "phpunit/phpunit": "^12.5"
