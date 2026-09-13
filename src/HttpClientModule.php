@@ -33,10 +33,11 @@ use Psr\Http\Client\ClientInterface;
  *
  * `CurlTransport` is registered separately from `HttpClient` so that both are
  * reachable: `HttpClient` for the retries and the problems, `CurlTransport` for
- * a caller that wants one unadorned request. It is also the seam a test or an
- * app replaces — `ValidateWiring` resolves every id at boot, so a wrong
- * registration under either id is a boot problem naming the id, not a 500 on
- * request N+1.
+ * a caller that wants one unadorned request. Neither id can be registered a
+ * second time — the container refuses that everywhere — so the seam for a
+ * different transport is `HttpClient`'s constructor. A test that wants the
+ * pack's own id to hold a client around a fake passes it to `TestApp::boot()`:
+ * `replace: [HttpClient::class => new HttpClient($fake, new Psr17Factory())]`.
  *
  * Config is the only source of settings; the pack reads no environment
  * variable of its own. An app that wants `HTTP_CLIENT_TIMEOUT` to win can read
