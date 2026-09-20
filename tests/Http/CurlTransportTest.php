@@ -7,6 +7,10 @@ namespace Lava\HttpClient\Tests\Http;
 use Lava\HttpClient\ClientOptions;
 use Lava\HttpClient\CurlTransport;
 use Lava\HttpClient\Problem\TransportFailed;
+use Lava\HttpClient\Problem\BadRequestUrl;
+use Lava\HttpClient\Problem\ResponseTooLarge;
+use Lava\HttpClient\Problem\UnsendableRequest;
+use Lava\HttpClient\Tests\Support\LenientRequest;
 use Lava\HttpClient\Tests\Support\LocalServer;
 use Nyholm\Psr7\Factory\Psr17Factory;
 use PHPUnit\Framework\TestCase;
@@ -184,5 +188,89 @@ final class CurlTransportTest extends TestCase
         } catch (TransportFailed $problem) {
             self::assertSame('transport_failed', $problem->code());
         }
+    }
+
+    // ── What the transport refuses on its own (security review, 2026-09-20) ──
+
+    public function testTheTransportRefusesANonHttpSchemeItself(): void
+    {
+        // HttpClient checks this too, but this class is public and documented
+        // as the one an app may take for an unadorned request — and curl here
+        // speaks thirty-two protocols, of which `gopher://` writes attacker
+        // bytes to an internal TCP port and `file://` reads the disk.
+        foreach (['gopher://127.0.0.1:1/_x', 'file:///etc/passwd'] as $url) {
+            $request = (new Psr17Factory())->createRequest('GET', $url);
+
+            try {
+                $this->transport()->sendRequest($request);
+                self::fail("{$url} must be refused by the transport itself");
+            } catch (BadRequestUrl $refused) {
+                self::assertSame('bad_request_url', $refused->code());
+                self::assertStringContainsString('is not http or https', $refused->getMessage());
+            }
+        }
+    }
+
+    public function testAMethodCarryingALineBreakNeverReachesCurl(): void
+    {
+        $request = new LenientRequest("GET / HTTP/1.1\r\nX-Injected: yes\r\n\r\nGET", self::$server->url('/ok'));
+
+        $this->expectException(UnsendableRequest::class);
+        $this->transport()->sendRequest($request);
+    }
+
+    public function testAHeaderCarryingALineBreakNeverReachesCurl(): void
+    {
+        // nyholm refuses this before the pack sees it, which is why the double
+        // exists: `sendRequest()` takes any PSR-7 request, including one whose
+        // implementation validates nothing.
+        $request = (new LenientRequest('GET', self::$server->url('/echo')))
+            ->withRawHeader('X-Note', "ok\r\nX-Injected: yes");
+
+        try {
+            $this->transport()->sendRequest($request);
+            self::fail('a header value carrying CRLF must be refused');
+        } catch (UnsendableRequest $refused) {
+            self::assertSame('unsendable_request', $refused->code());
+            self::assertStringContainsString('X-Note', $refused->getMessage());
+            self::assertStringNotContainsString('X-Injected', $refused->getMessage(), 'the value is never printed');
+        }
+    }
+
+    // ── The response ceiling ────────────────────────────────────────────────
+
+    public function testAResponseOverTheCeilingIsAProblemRatherThanADeadWorker(): void
+    {
+        $transport = $this->transport(new ClientOptions(timeout: 5.0, connectTimeout: 2.0, maxResponseBytes: 50_000));
+
+        try {
+            $transport->sendRequest($this->request('GET', '/big?bytes=400000'));
+            self::fail('a response over the ceiling must be refused');
+        } catch (ResponseTooLarge $refused) {
+            self::assertSame('response_too_large', $refused->code());
+            self::assertSame(502, $refused->httpStatus());
+            self::assertSame(50_000, $refused->context['limit_bytes']);
+            self::assertGreaterThan(50_000, $refused->context['received_bytes']);
+        }
+    }
+
+    public function testTheCeilingHoldsWhenTheUpstreamDeclaresNoLength(): void
+    {
+        // The case CURLOPT_MAXFILESIZE cannot see: with no Content-Length curl
+        // only knows the size once it has already read it.
+        $transport = $this->transport(new ClientOptions(timeout: 5.0, connectTimeout: 2.0, maxResponseBytes: 50_000));
+
+        $this->expectException(ResponseTooLarge::class);
+        $transport->sendRequest($this->request('GET', '/big-unknown?bytes=400000'));
+    }
+
+    public function testAResponseUpToTheCeilingIsDeliveredWhole(): void
+    {
+        $transport = $this->transport(new ClientOptions(timeout: 5.0, connectTimeout: 2.0, maxResponseBytes: 1_000));
+
+        $response = $transport->sendRequest($this->request('GET', '/big?bytes=1000'));
+
+        self::assertSame(200, $response->getStatusCode());
+        self::assertSame(1_000, strlen((string) $response->getBody()), 'the boundary itself is not over it');
     }
 }

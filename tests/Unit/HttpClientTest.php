@@ -12,6 +12,9 @@ use Lava\HttpClient\Problem\TransportFailed;
 use Lava\HttpClient\Problem\UnencodableJsonBody;
 use Lava\HttpClient\Problem\UnexpectedStatus;
 use Lava\HttpClient\Tests\Support\FakeTransport;
+use Lava\HttpClient\Problem\UnsendableRequest;
+use Lava\HttpClient\Tests\Support\OneShotStream;
+use Psr\Http\Message\ResponseInterface;
 use Nyholm\Psr7\Factory\Psr17Factory;
 use PHPUnit\Framework\TestCase;
 use Psr\Http\Message\RequestInterface;
@@ -419,5 +422,89 @@ final class HttpClientTest extends TestCase
         $this->client($transport)->get(self::URL, ['Authorization' => 'Bearer secret-token']);
 
         self::assertSame('Bearer secret-token', $transport->lastRequest()->getHeaderLine('Authorization'));
+    }
+
+    // ── What a retry may do to the body (security review, 2026-09-20) ─────
+
+    public function testABodyThatCannotBeRewoundIsSentOnceEvenOnAnIdempotentMethod(): void
+    {
+        // PUT is idempotent, so the METHOD allows a retry — but the body is a
+        // one-shot stream, and attempts two and three would send an empty one
+        // to an endpoint that would accept it happily. A truncated upload that
+        // reports success is worse than a failed one.
+        $transport = new FakeTransport();
+        $transport->repeat(3, static function (RequestInterface $request): never {
+            throw new \Lava\HttpClient\Tests\Support\FakeNetworkFailure($request, 'connection reset');
+        });
+
+        $request = $this->request('PUT')->withBody(new OneShotStream('IMPORTANT PAYLOAD'));
+
+        try {
+            $this->client($transport)->sendRequest($request);
+            self::fail('the transport failed on every attempt');
+        } catch (TransportFailed $failed) {
+            self::assertStringContainsString('connection reset', $failed->getMessage());
+        }
+
+        self::assertSame(1, $transport->attempts(), 'a one-shot body is sent exactly once');
+    }
+
+    public function testARewindableBodyIsWholeOnEveryAttempt(): void
+    {
+        // The other half of the same rule: when the body CAN be rewound, the
+        // retry must actually send it — reading it once left the stream at its
+        // end, so the second attempt used to send nothing at all.
+        $seen = [];
+        $transport = new FakeTransport();
+        $transport->repeat(2, static function (RequestInterface $request) use (&$seen): never {
+            $seen[] = (string) $request->getBody();
+
+            throw new \Lava\HttpClient\Tests\Support\FakeNetworkFailure($request, 'timeout');
+        });
+        $transport->push(static function (RequestInterface $request) use (&$seen): ResponseInterface {
+            $seen[] = (string) $request->getBody();
+
+            return (new Psr17Factory())->createResponse(200);
+        });
+
+        $request = $this->request('PUT')->withBody((new Psr17Factory())->createStream('IMPORTANT PAYLOAD'));
+        $this->client($transport)->sendRequest($request);
+
+        self::assertSame(
+            ['IMPORTANT PAYLOAD', 'IMPORTANT PAYLOAD', 'IMPORTANT PAYLOAD'],
+            $seen,
+            'every attempt sends the whole body',
+        );
+    }
+
+    public function testAMethodCarryingALineBreakIsRefusedBeforeTheTransportSeesIt(): void
+    {
+        // The method reaches the wire verbatim, so `\r\n` in it ends the
+        // request line and everything after it becomes a second request.
+        $transport = new FakeTransport();
+
+        try {
+            $this->client($transport)->request("GET / HTTP/1.1\r\nX-Injected: yes\r\n\r\nGET", self::URL);
+            self::fail('a method carrying a line break must be refused');
+        } catch (UnsendableRequest $refused) {
+            self::assertSame('unsendable_request', $refused->code());
+            self::assertStringContainsString('\\x0D\\x0A', $refused->getMessage(), 'the control bytes are shown escaped');
+            self::assertStringNotContainsString("\r", $refused->getMessage(), 'and never raw');
+        }
+
+        self::assertSame(0, $transport->attempts(), 'nothing was sent');
+    }
+
+    public function testPostJsonKeepsAContentTypeTheCallerSetInAnyCase(): void
+    {
+        // A header name is case-insensitive, so a caller writing
+        // `content-type` means the same thing as `Content-Type` — and used to
+        // have it silently replaced.
+        $transport = new FakeTransport();
+        $transport->pushResponse(200, '{}');
+
+        $this->client($transport)->postJson(self::URL, ['a' => 1], ['content-type' => 'application/vnd.api+json']);
+
+        self::assertSame('application/vnd.api+json', $transport->lastRequest()->getHeaderLine('Content-Type'));
     }
 }

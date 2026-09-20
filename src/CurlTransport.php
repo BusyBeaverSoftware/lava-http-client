@@ -4,7 +4,10 @@ declare(strict_types=1);
 
 namespace Lava\HttpClient;
 
+use Lava\HttpClient\Problem\BadRequestUrl;
+use Lava\HttpClient\Problem\ResponseTooLarge;
 use Lava\HttpClient\Problem\TransportFailed;
+use Lava\HttpClient\Problem\UnsendableRequest;
 use Psr\Http\Client\ClientInterface;
 use Psr\Http\Message\RequestInterface;
 use Psr\Http\Message\ResponseFactoryInterface;
@@ -45,15 +48,21 @@ final class CurlTransport implements ClientInterface
         $url = (string) $request->getUri();
         $method = $request->getMethod();
 
-        // `HttpClient` refuses an unusable URL before it gets here, but this
-        // class is public and a caller may use it directly — so it refuses the
-        // two things curl cannot express at all rather than handing them over
-        // and reporting whatever curl says about them.
-        if ($url === '' || $method === '') {
-            throw TransportFailed::of(
-                $request,
-                $url === '' ? 'the request has no URL' : 'the request has no method',
-            );
+        // `HttpClient` makes these same three checks before it gets here, and
+        // they are repeated because this class is public, documented, and
+        // reachable on its own: an app that takes `CurlTransport` for one
+        // unadorned request would otherwise have no scheme rule at all, and
+        // curl speaks thirty-two protocols (Lava Notes security review,
+        // 2026-09-20). A guard that only runs on the path most callers take is
+        // not a guard.
+        $badMethod = Url::whyBadMethod($method);
+        if ($badMethod !== null) {
+            throw UnsendableRequest::method($request, $method, $badMethod);
+        }
+
+        $unusable = Url::whyUnusable($url);
+        if ($unusable !== null) {
+            throw BadRequestUrl::of($request, $unusable);
         }
 
         $handle = curl_init();
@@ -93,11 +102,36 @@ final class CurlTransport implements ClientInterface
 
         $body = (string) $request->getBody();
 
+        // The body is collected here, a chunk at a time, instead of being
+        // returned in one piece by `curl_exec()`: that is the only way to stop
+        // reading. `CURLOPT_MAXFILESIZE` is not enough on its own, because it
+        // believes `Content-Length`, and an upstream that declares nothing —
+        // or lies — is exactly the one worth stopping.
+        $collected = '';
+        $received = 0;
+        $limit = $this->options->maxResponseBytes;
+        $overflowed = false;
+        $write = static function (\CurlHandle $_, string $chunk) use (&$collected, &$received, &$overflowed, $limit): int {
+            $received += strlen($chunk);
+            if ($received > $limit) {
+                // Any number that is not the chunk's length aborts the transfer;
+                // -1 is the conventional one, and curl then reports errno 23.
+                $overflowed = true;
+
+                return -1;
+            }
+
+            $collected .= $chunk;
+
+            return strlen($chunk);
+        };
+
         $options = [
             CURLOPT_URL => $url,
             CURLOPT_CUSTOMREQUEST => $method,
             CURLOPT_RETURNTRANSFER => true,
             CURLOPT_HEADER => false,
+            CURLOPT_WRITEFUNCTION => $write,
             // A redirect is a response, and PSR-18 says return it. Following it
             // here would hide the 301 from the caller and, on a redirect to
             // another host, silently resend the Authorization header somewhere
@@ -108,6 +142,17 @@ final class CurlTransport implements ClientInterface
             CURLOPT_HTTPHEADER => self::headerLines($request),
             CURLOPT_HEADERFUNCTION => $collect,
         ];
+
+        // Belt and braces for the scheme rule above: even if a URL reached curl
+        // unchecked, libcurl itself speaks nothing but HTTP here — which also
+        // covers the scheme a redirect could name, whether or not following
+        // them is ever turned on. libcurl gained the string form in 7.85; the
+        // bitmask says the same thing on an older build.
+        if (defined('CURLOPT_PROTOCOLS_STR')) {
+            $options[CURLOPT_PROTOCOLS_STR] = 'http,https';
+        } else {
+            $options[CURLOPT_PROTOCOLS] = CURLPROTO_HTTP | CURLPROTO_HTTPS;
+        }
 
         // An empty configured agent is left to curl rather than sent as a blank
         // header: `User-Agent: ` is refused outright by some servers, and
@@ -124,15 +169,25 @@ final class CurlTransport implements ClientInterface
 
         curl_setopt_array($handle, $options);
 
-        $raw = curl_exec($handle);
+        $completed = curl_exec($handle);
         $error = curl_error($handle);
         $status = (int) curl_getinfo($handle, CURLINFO_RESPONSE_CODE);
 
-        // `curl_exec` returns false when the transfer failed and true only in
-        // the (unused) output-to-stdout mode, so anything that is not a string
-        // means no complete response arrived — including the truncated-response
-        // case, where curl reports errno 18 and no body at all.
-        if (!is_string($raw) || $status === 0) {
+        // Before the transport check below, because an abandoned transfer looks
+        // exactly like a failed one from curl's side — and "the body was too
+        // big" is an answer a caller can act on, while curl's own errno 23
+        // ("failed writing body") names this pack's own callback and explains
+        // nothing.
+        if ($overflowed) {
+            throw ResponseTooLarge::of($request, $limit, $received);
+        }
+
+        // With a write callback in place a completed transfer returns true and
+        // the body is in `$collected`; `false` means the transfer failed. Either
+        // way a response code of 0 means no complete response arrived —
+        // including the truncated-response case, where curl reports errno 18
+        // and no body at all.
+        if ($completed === false || $status === 0) {
             throw TransportFailed::of(
                 $request,
                 $error !== '' ? $error : 'curl returned no complete response',
@@ -140,7 +195,7 @@ final class CurlTransport implements ClientInterface
         }
 
         $response = $this->factory->createResponse($status)
-            ->withBody($this->factory->createStream($raw));
+            ->withBody($this->factory->createStream($collected));
 
         foreach ($headers as $name => $values) {
             $response = $response->withHeader($name, $values);
@@ -157,7 +212,18 @@ final class CurlTransport implements ClientInterface
      * servers reject outright. Everything else, `Authorization` included, is
      * passed through — the client's job is to send what it was given.
      *
+     * **Except a line break.** A name or value carrying CR, LF or NUL is
+     * refused rather than concatenated: libcurl writes these lines into the
+     * header block verbatim, so a `\r\n` in a value ends the header and starts
+     * whatever follows it — a second header, or a whole second request. The
+     * pack's own array API is protected by the PSR-7 implementation, but
+     * `sendRequest()` is the PSR-18 boundary and takes any request object,
+     * including one whose implementation validates nothing (Lava Notes security
+     * review, 2026-09-20).
+     *
      * @return list<string>
+     *
+     * @throws UnsendableRequest when a header would split the request
      */
     private static function headerLines(RequestInterface $request): array
     {
@@ -167,6 +233,10 @@ final class CurlTransport implements ClientInterface
                 continue;
             }
             foreach ($values as $value) {
+                if (preg_match('/[\r\n\x00]/', $name . $value) === 1) {
+                    throw UnsendableRequest::header($request, $name);
+                }
+
                 $lines[] = $name . ': ' . $value;
             }
         }

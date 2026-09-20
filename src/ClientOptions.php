@@ -42,6 +42,21 @@ final readonly class ClientOptions
         /** Milliseconds between attempts. Fixed, not exponential: a deterministic delay is a testable one. */
         public int $backoffMs = 100,
         public string $userAgent = 'lavaphp/http-client',
+        /**
+         * The most a response body may weigh, in bytes.
+         *
+         * A ceiling exists because the alternative is not a slow request, it is
+         * a dead worker: the body is buffered in memory, so an upstream that
+         * answers with more than `memory_limit` kills the process with a fatal
+         * error — which no problem type can catch and no error page can render.
+         * A timeout does not bound this; a slow dribble of bytes exhausts the
+         * limit inside any time budget (Lava Notes security review, 2026-09-20).
+         *
+         * 8 MiB because this client is for APIs, and a JSON payload larger than
+         * that is a file transfer wearing an API's clothes — an app that really
+         * wants one raises this for that call and knows to watch its memory.
+         */
+        public int $maxResponseBytes = 8_388_608,
     ) {
     }
 
@@ -83,12 +98,16 @@ final readonly class ClientOptions
             );
         }
 
+        $maxResponseBytes = $config->int('http_client.max_response_bytes', 8_388_608);
+        self::positive($config, 'http_client.max_response_bytes', $maxResponseBytes, 'a positive number of bytes');
+
         return new self(
             timeout: (float) $timeout,
             connectTimeout: (float) $connectTimeout,
             retries: $retries,
             backoffMs: $backoff,
             userAgent: $config->string('http_client.user_agent', 'lavaphp/http-client'),
+            maxResponseBytes: $maxResponseBytes,
         );
     }
 

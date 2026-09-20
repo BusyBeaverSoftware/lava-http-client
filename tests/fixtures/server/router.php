@@ -77,6 +77,28 @@ switch (true) {
         echo 'short';
         return;
 
+    // A body of an exact size, for the response ceiling. `?bytes=` is capped
+    // so a typo in a test cannot ask the fixture server for a gigabyte.
+    case $path === '/big':
+        $bytes = min(4_000_000, max(1, (int) ($_GET['bytes'] ?? 1024)));
+        http_response_code(200);
+        header('Content-Type: text/plain');
+        header('Content-Length: ' . $bytes);
+        echo str_repeat('a', $bytes);
+        return;
+
+    // The same body with no Content-Length, which is the case CURLOPT_MAXFILESIZE
+    // cannot see: curl only knows how big it was when it is already too late.
+    case $path === '/big-unknown':
+        $bytes = min(4_000_000, max(1, (int) ($_GET['bytes'] ?? 1024)));
+        http_response_code(200);
+        header('Content-Type: text/plain');
+        for ($sent = 0; $sent < $bytes; $sent += 8192) {
+            echo str_repeat('a', (int) min(8192, $bytes - $sent));
+            flush();
+        }
+        return;
+
     case $path === '/slow':
         usleep(1_000_000);
         $send(200, 'slow');

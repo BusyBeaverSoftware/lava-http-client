@@ -10,6 +10,7 @@ use Lava\HttpClient\Problem\BadRequestUrl;
 use Lava\HttpClient\Problem\TransportFailed;
 use Lava\HttpClient\Problem\UnencodableJsonBody;
 use Lava\HttpClient\Problem\UnexpectedStatus;
+use Lava\HttpClient\Problem\UnsendableRequest;
 use Psr\Http\Client\ClientInterface;
 use Psr\Http\Client\NetworkExceptionInterface;
 use Psr\Http\Message\RequestFactoryInterface;
@@ -76,12 +77,28 @@ final class HttpClient implements ClientInterface
             throw BadRequestUrl::of($request, $reason);
         }
 
-        $attempts = $this->attemptsFor($request->getMethod());
+        // Same place, same reason: the method reaches the wire verbatim, and a
+        // line break in it puts a second request there. See Url::whyBadMethod().
+        $method = $request->getMethod();
+        $badMethod = Url::whyBadMethod($method);
+        if ($badMethod !== null) {
+            throw UnsendableRequest::method($request, $method, $badMethod);
+        }
+
+        $attempts = $this->attemptsFor($request);
         $failure = null;
 
         for ($attempt = 1; $attempt <= $attempts; $attempt++) {
             if ($attempt > 1 && $this->options->backoffMs > 0) {
                 usleep($this->options->backoffMs * 1000);
+            }
+
+            // A retry re-sends the body, and the body is a stream that the last
+            // attempt read to the end — so it is rewound first, or the second
+            // attempt would send nothing at all. `attemptsFor()` has already
+            // refused to retry a stream that cannot be rewound.
+            if ($attempt > 1) {
+                $request->getBody()->rewind();
             }
 
             try {
@@ -159,9 +176,14 @@ final class HttpClient implements ClientInterface
 
         if ($body !== []) {
             $payload = self::encode($method, $url, $body);
-            // `+=` keeps a Content-Type the caller set — an API that wants
-            // `application/vnd.api+json` is not a mistake to correct.
-            $headers += ['Content-Type' => 'application/json'];
+            // A Content-Type the caller set is kept — an API that wants
+            // `application/vnd.api+json` is not a mistake to correct — and the
+            // comparison ignores case, because a header name does: `+=` on the
+            // array replaced a caller's lowercase `content-type` while honouring
+            // `Content-Type`, which is two behaviours for one header.
+            if (!self::names($headers, 'Content-Type')) {
+                $headers['Content-Type'] = 'application/json';
+            }
         }
 
         $response = $this->request($method, $url, $headers, $payload);
@@ -194,14 +216,48 @@ final class HttpClient implements ClientInterface
         return $this->json('POST', $url, $body, $headers);
     }
 
-    /** How many times this method may be sent: once, unless it is idempotent. */
-    private function attemptsFor(string $method): int
+    /**
+     * How many times this request may be sent: once, unless the method is
+     * idempotent AND the body can be sent again.
+     *
+     * The body half is the quieter rule. A `PUT` is idempotent, so the method
+     * allows a retry — but if its body is a stream that cannot be rewound (a
+     * pipe, a socket, an upload being forwarded), the first attempt consumed
+     * it, and every attempt after that would send an EMPTY body to an endpoint
+     * that would accept it happily. A truncated upload that reports success is
+     * worse than a failed one, so a one-shot body is sent exactly once and the
+     * transport's failure is reported as it stands (Lava Notes security review,
+     * 2026-09-20).
+     */
+    private function attemptsFor(RequestInterface $request): int
     {
-        if (!in_array(strtoupper($method), self::IDEMPOTENT, true)) {
+        if (!in_array(strtoupper($request->getMethod()), self::IDEMPOTENT, true)) {
+            return 1;
+        }
+
+        $body = $request->getBody();
+        if (!$body->isSeekable() && ($body->getSize() === null || $body->getSize() > 0)) {
             return 1;
         }
 
         return max(1, $this->options->retries + 1);
+    }
+
+    /**
+     * Whether a header is already in the array, by HTTP's rule rather than
+     * PHP's: header names are case-insensitive.
+     *
+     * @param array<string, string> $headers
+     */
+    private static function names(array $headers, string $header): bool
+    {
+        foreach (array_keys($headers) as $name) {
+            if (strcasecmp((string) $name, $header) === 0) {
+                return true;
+            }
+        }
+
+        return false;
     }
 
     /**
