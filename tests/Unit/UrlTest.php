@@ -98,4 +98,80 @@ final class UrlTest extends TestCase
             Url::redact('https://api.example.com/users/me@example.com'),
         );
     }
+
+    /**
+     * The names OAuth 2 and the cloud SDKs actually use. The rule used to
+     * anchor on a word boundary, and `_` is a word character, so every one of
+     * these went out in clear beside a masked `token=***` — which made the
+     * guard look like it had worked (security review, 2026-09-20).
+     *
+     * @return iterable<string, array{string}>
+     */
+    public static function secretNames(): iterable
+    {
+        foreach ([
+            'token', 'api_key', 'access_token', 'secret', 'password', 'signature',
+            'client_secret', 'refresh_token', 'id_token', 'private_key', 'session_token',
+            'app_secret', 'shared_secret', 'webhook_secret', 'aws_secret_access_key',
+            'sas_token', 'authToken', 'X-Api-Key', 'user_credential',
+        ] as $name) {
+            yield $name => [$name];
+        }
+    }
+
+    #[DataProvider('secretNames')]
+    public function testItMasksASecretWhateverPrefixItsNameCarries(string $name): void
+    {
+        $redacted = Url::redact("https://api.example.com/v1/x?{$name}=SUPERSECRET&page=2");
+
+        self::assertStringNotContainsString('SUPERSECRET', $redacted, "'{$name}' leaked its value");
+        self::assertStringContainsString("{$name}=***", $redacted);
+        self::assertStringContainsString('page=2', $redacted, 'an ordinary parameter is still readable');
+    }
+
+    public function testItMasksAPasswordThatContainsAnAtSign(): void
+    {
+        // The match runs to the LAST @ before the path; stopping at the first
+        // one left the tail of the password in the string.
+        self::assertSame('https://***@host/x', Url::redact('https://user:p@ssw0rd@host/x'));
+    }
+
+    public function testMaskingAValueKeepsTheSentenceAroundIt(): void
+    {
+        // curl echoes the URL back inside its own error text, and the redaction
+        // runs over that text too — so it must mask the value without eating
+        // the reason, which is the part a reader needs.
+        self::assertSame(
+            'GET https://h/x?api_key=*** could not be sent: timeout',
+            Url::redact('GET https://h/x?api_key=SUPERSECRET could not be sent: timeout'),
+        );
+    }
+
+    /** @return iterable<string, array{string, bool}> */
+    public static function methods(): iterable
+    {
+        yield 'GET' => ['GET', true];
+        yield 'PATCH' => ['PATCH', true];
+        yield 'a custom token' => ['X-LOCK_1.2', true];
+        yield 'empty' => ['', false];
+        yield 'a space' => ['GET /x', false];
+        yield 'CRLF, a second request' => ["GET / HTTP/1.1\r\nX-Injected: yes\r\n\r\nGET", false];
+        yield 'a bare newline' => ["GET\n", false];
+        yield 'a null byte' => ["GET\0", false];
+    }
+
+    #[DataProvider('methods')]
+    public function testItDecidesWhatCanBeSentAsAMethod(string $method, bool $sendable): void
+    {
+        $reason = Url::whyBadMethod($method);
+
+        if ($sendable) {
+            self::assertNull($reason, "'{$method}' is a valid RFC 9110 token");
+
+            return;
+        }
+
+        self::assertIsString($reason);
+        self::assertNotSame('', $reason);
+    }
 }
