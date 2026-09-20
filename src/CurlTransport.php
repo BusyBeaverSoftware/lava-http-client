@@ -48,6 +48,17 @@ final class CurlTransport implements ClientInterface
         $url = (string) $request->getUri();
         $method = $request->getMethod();
 
+        // The two things curl cannot express at all, kept ahead of the rules
+        // below because they are about the request object rather than about
+        // what may be sent — and because everything after this point may
+        // assume a URL and a method exist.
+        if ($url === '' || $method === '') {
+            throw TransportFailed::of(
+                $request,
+                $url === '' ? 'the request has no URL' : 'the request has no method',
+            );
+        }
+
         // `HttpClient` makes these same three checks before it gets here, and
         // they are repeated because this class is public, documented, and
         // reachable on its own: an app that takes `CurlTransport` for one

@@ -9,6 +9,8 @@ use Lava\HttpClient\Problem\BadJsonResponse;
 use Lava\HttpClient\Problem\BadRequestUrl;
 use Lava\HttpClient\Problem\TransportFailed;
 use Lava\HttpClient\Problem\UnencodableJsonBody;
+use Lava\HttpClient\Problem\ResponseTooLarge;
+use Lava\HttpClient\Problem\UnsendableRequest;
 use Lava\HttpClient\Problem\UnexpectedStatus;
 use Nyholm\Psr7\Factory\Psr17Factory;
 use PHPUnit\Framework\Attributes\DataProvider;
@@ -64,6 +66,24 @@ final class HttpClientProblemsTest extends TestCase
             'bad_json_response',
             BadJsonResponse::of('GET', self::URL, 200, '<html>', 'Syntax error'),
             502,
+        ];
+
+        yield 'response_too_large' => [
+            'response_too_large',
+            ResponseTooLarge::of((new Psr17Factory())->createRequest('GET', self::URL), 8_388_608, 8_400_000),
+            502,
+        ];
+
+        yield 'unsendable_request (method)' => [
+            'unsendable_request',
+            UnsendableRequest::method((new Psr17Factory())->createRequest('GET', self::URL), "GET\r\n", 'it is not a method name'),
+            500,
+        ];
+
+        yield 'unsendable_request (header)' => [
+            'unsendable_request',
+            UnsendableRequest::header((new Psr17Factory())->createRequest('GET', self::URL), 'X-Note'),
+            500,
         ];
 
         yield 'unencodable_json_body' => [
